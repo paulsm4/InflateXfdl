@@ -1,10 +1,15 @@
 package com.rgb;
 
-import java.awt.EventQueue;
 import java.io.*;
+import java.awt.BorderLayout;
+import java.awt.Component;
+import java.awt.Dimension;
+import java.awt.EventQueue;
+import java.awt.event.ActionListener;
+import java.awt.event.ActionEvent;
+import java.awt.Font;
 import javax.swing.JFrame;
 import javax.swing.JPanel;
-import java.awt.BorderLayout;
 import javax.swing.border.TitledBorder;
 import javax.swing.JScrollPane;
 import javax.swing.JEditorPane;
@@ -15,17 +20,11 @@ import javax.swing.JButton;
 import javax.swing.JFileChooser;
 import javax.swing.filechooser.FileFilter;
 import javax.swing.JOptionPane;
-import java.awt.Dimension;
-import java.awt.event.ActionListener;
-import java.awt.event.ActionEvent;
-import java.util.zip.*; // GZIP etc
 import org.w3c.dom.*; // XML DOM
 import javax.xml.parsers.*; // DocumentBuilder etc
 import javax.xml.transform.*;  // Document manipulation
 import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.stream.StreamResult;
-import java.awt.Component;
-import java.awt.Font;
 
 public class FrmMain {
 
@@ -83,7 +82,6 @@ public class FrmMain {
 		
 		edtXfdlFile = new JTextField();
 		panel3.add(edtXfdlFile);
-		edtXfdlFile.setText("HelloIForms8.xfdl");
 		edtXfdlFile.setColumns(30);
 		
 		JButton btnBrowse = new JButton("Browse...");
@@ -124,88 +122,36 @@ public class FrmMain {
 	}
 
 	private void inflateFile (String fname) {
-		FileInputStream fis = null;
 		try {
-			// Try to open XFDL input file
-			File f = new File(fname);
-			if (!f.exists())
-				throw new Exception (fname + " does not exist");
-			
-			// Check MIME/Content-type header
-			MimeHeader mimeHeader = parseFileHeader (f);
-			if (mimeHeader.header_len < 0) {
-				throw new Exception (fname + " is not an IBM XFDL format file");
-			}
-			
-			// Read base-64 text into new InputStream
-			fis = new FileInputStream (fname);
-			fis.skip(mimeHeader.header_len);
-			Base64.InputStream bis = new Base64.InputStream (fis, Base64.DECODE);
+			// Open specified Xfdl file
+			XfdlFile xfdlFile = new XfdlFile (fname);
+			InputStream is = xfdlFile.open ();
 
-			// Unzip from decoded stream
-			GZIPInputStream gis = new GZIPInputStream (bis);
-			
-			// Read the sucker into an XML document
 			DocumentBuilder db = 
-				DocumentBuilderFactory.newInstance().newDocumentBuilder();
-			document = db.parse (gis);
-			
-			gis.close ();
-			bis.close ();
-			fis.close ();
-
-			// Display the XML to editor pane
+					DocumentBuilderFactory.newInstance().newDocumentBuilder();
+			document = db.parse (is);
 			Transformer transformer = 
 				TransformerFactory.newInstance().newTransformer ();
 			DOMSource source = new DOMSource (document);
+
+			// Display the XML to editor pane
 			StreamResult result = new StreamResult (new StringWriter());
 			transformer.transform(source, result);
 			editorPane.setText(result.getWriter().toString());
-			
-			// Update UI
+
+			// Close file
+			xfdlFile.close ();			
+
+			// Update the rest of the UI
 			editorPane.setCaretPosition(0);
 			btnWriteXml.setEnabled (true);
+
 		}
 		catch (Exception e) {
 			showMessage ("Read error: " + e.getMessage (), 0);
 		}
 	}
 	
-	/*
-	 * IBM Forms 4.x: application/vnd.xfdl; content-encoding="base64-gzip"
-	 * IBM Forms 8.x: application/vnd.xfdl;content-encoding=base64-gzip
-	 */
-	private MimeHeader parseFileHeader (File f) {
-		FileInputStream fis = null;
-		MimeHeader mimeHeader = new MimeHeader ();
-		try {
-			byte bytes[] = new byte[80];
-			fis = new FileInputStream(f);
-			fis.read (bytes, 0, bytes.length);
-			String header = new String (bytes);
-			int i= header.lastIndexOf (';');
-			if (i > 0) {
-				mimeHeader.mime_type = header.substring (0, i-1).trim();
-				String s = header.substring(i+1);
-				int j = s.lastIndexOf("base64-gzip");
-				if (j > 0) {
-					if (s.lastIndexOf("\"base64-gzip\"") > 0) {
-						mimeHeader.content_type = s.substring(0, j+13).trim();
-						mimeHeader.header_len = header.lastIndexOf ("gzip\"") + 5;
-					}
-					else {
-						mimeHeader.content_type = s.substring(0, j+11).trim();
-						mimeHeader.header_len = header.lastIndexOf ("gzip") + 4;
-					}					
-				}
-			}
-			fis.close ();
-		}
-		catch (Exception e) {
-			; // No-op
-		}
-		return mimeHeader;
-	}
 
 	private String mkXmlName (String xfdlName) {
 	  String s = null;
@@ -230,16 +176,19 @@ public class FrmMain {
 			; // No-op: just use default folder instead of edtXfdlFile text
 		}
 
-		// Select folder
 		String sPath = null;
 	    try {
+			// Select folder
 	    	fc.setDialogTitle ("Select new IBM Form file");
 	    	fc.setMultiSelectionEnabled (false); 
 	    	int iret = fc.showOpenDialog (null);
 	    	if (iret != JFileChooser.APPROVE_OPTION)
 	    		return;
+	    	// Update UI
 	    	sPath = fc.getSelectedFile ().getCanonicalPath();
 	    	edtXfdlFile.setText(sPath);
+	    	// Erase previous XML 
+	    	editorPane.setText("");
 	    }
 	   	catch (IOException e) {
 	   		return; // No-op: simply don't update UI
@@ -283,22 +232,16 @@ public class FrmMain {
 	
 }
 
-class MimeHeader {
-	public String mime_type;
-	public String content_type;
-	public int header_len;
-	public MimeHeader () {
-		header_len = -1;  // Default: MIME/Content header not found
-	}
-}
-
 class XfdlFilter extends FileFilter {
 
 	public boolean accept (File f) {
-		return (f.isDirectory() || f.getName().toLowerCase().endsWith(".xfdl"));
+		return (
+			f.isDirectory() || 
+			f.getName().toLowerCase().endsWith(".xfdd") ||
+			f.getName().toLowerCase().endsWith(".xfdl"));
 	}
 	
 	public String getDescription() {
-		return "xfdl files ";
+		return "Xfdl Files (*.xfdd;*.xfdl)";
 	}
 }
